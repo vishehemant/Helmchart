@@ -122,6 +122,7 @@ A complete, hands-on lab that teaches you how to build **reusable Helm charts**,
 ├── .github/
 │   └── workflows/
 │       └── helm-ci.yaml           # GitHub Actions CI pipeline
+├── kind-config.yaml               # kind cluster configuration (3 nodes)
 └── docs/
     └── INTERVIEW_SCENARIOS.md     # Interview Q&A and scenarios
 ```
@@ -135,20 +136,127 @@ A complete, hands-on lab that teaches you how to build **reusable Helm charts**,
 | Docker | 20+ | https://docs.docker.com/get-docker/ |
 | kubectl | 1.27+ | https://kubernetes.io/docs/tasks/tools/ |
 | Helm | 3.14+ | https://helm.sh/docs/intro/install/ |
-| minikube or kind | latest | https://minikube.sigs.k8s.io / https://kind.sigs.k8s.io |
+| kind | 0.20+ | https://kind.sigs.k8s.io/docs/user/quick-start/#installation |
 | Argo CD CLI | 2.10+ | https://argo-cd.readthedocs.io/en/stable/cli_installation/ |
 | Git | 2.30+ | https://git-scm.com/downloads |
+
+### Installing kind
+
+kind (Kubernetes IN Docker) runs a full Kubernetes cluster inside Docker containers. It is lightweight, fast, and ideal for local development and CI pipelines.
+
+**Linux:**
+```bash
+[ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+[ $(uname -m) = aarch64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-arm64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin/kind
+```
+
+**macOS (Homebrew):**
+```bash
+brew install kind
+```
+
+**Windows (Chocolatey):**
+```bash
+choco install kind
+```
+
+### kind Cluster Configuration
+
+This lab uses a custom kind config with 1 control-plane node and 2 worker nodes. Port mappings expose NodePort services and the Ingress controller to your host machine.
+
+Save the following as `kind-config.yaml` in the repo root (already included in this repo):
+
+```yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: helm-argocd-lab
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+      - containerPort: 30000
+        hostPort: 30000
+        protocol: TCP
+      - containerPort: 30001
+        hostPort: 30001
+        protocol: TCP
+  - role: worker
+  - role: worker
+```
 
 ### Quick Setup (copy-paste)
 
 ```bash
-# Start a local Kubernetes cluster
-minikube start --cpus=4 --memory=8192 --driver=docker
+# 1. Create the kind cluster
+kind create cluster --config kind-config.yaml
 
-# Verify tools
+# 2. Verify the cluster is running
+kubectl cluster-info --context kind-helm-argocd-lab
+kubectl get nodes
+# Expected output:
+#   NAME                              STATUS   ROLES           AGE   VERSION
+#   helm-argocd-lab-control-plane     Ready    control-plane   ...   v1.31.x
+#   helm-argocd-lab-worker            Ready    <none>          ...   v1.31.x
+#   helm-argocd-lab-worker2           Ready    <none>          ...   v1.31.x
+
+# 3. Install the NGINX Ingress Controller for kind
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+
+# Wait for the ingress controller to be ready
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=120s
+
+# 4. Verify all tools
 kubectl version --client
 helm version
 argocd version --client
+kind version
+```
+
+### Loading Local Docker Images into kind
+
+When working with locally built images (e.g., the sample app), load them into the kind cluster instead of pushing to a registry:
+
+```bash
+# Build the sample app image
+docker build -t myregistry.azurecr.io/webapp:dev-latest examples/sample-app/
+
+# Load the image into the kind cluster
+kind load docker-image myregistry.azurecr.io/webapp:dev-latest --name helm-argocd-lab
+
+# Verify the image is available inside the cluster
+docker exec -it helm-argocd-lab-control-plane crictl images | grep webapp
+```
+
+### Managing the kind Cluster
+
+```bash
+# List running kind clusters
+kind get clusters
+
+# Get the kubeconfig for a cluster
+kind get kubeconfig --name helm-argocd-lab
+
+# Delete the cluster when done
+kind delete cluster --name helm-argocd-lab
+
+# Recreate from scratch
+kind create cluster --config kind-config.yaml
 ```
 
 ---
@@ -419,9 +527,23 @@ kubectl get ingress webapp-prod -n webapp-prod -o yaml | grep tls -A5
 
 ## Lab 4 - Installing Argo CD
 
-> **Goal**: Install Argo CD in your cluster and access the dashboard.
+> **Goal**: Install Argo CD in your kind cluster and access the dashboard.
 
-### 4.1 Install Argo CD
+### 4.1 Verify Your kind Cluster
+
+```bash
+# Confirm the kind cluster is running and you have the right context
+kubectl cluster-info --context kind-helm-argocd-lab
+
+# Verify all nodes are Ready
+kubectl get nodes
+# Expected: 1 control-plane + 2 workers
+
+# Check available resources
+kubectl top nodes 2>/dev/null || echo "Metrics server not installed (optional)"
+```
+
+### 4.2 Install Argo CD
 
 ```bash
 # Create the namespace
@@ -431,12 +553,21 @@ kubectl apply -f argocd/namespace.yaml
 kubectl apply -n argocd \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-# Wait for pods to be ready
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server \
-  -n argocd --timeout=300s
+# Wait for all Argo CD pods to be ready (this may take 1-2 minutes on kind)
+kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s
+
+# Verify all components are running
+kubectl get pods -n argocd
+# Expected pods:
+#   argocd-application-controller-0
+#   argocd-dex-server-...
+#   argocd-notifications-controller-...
+#   argocd-redis-...
+#   argocd-repo-server-...
+#   argocd-server-...
 ```
 
-### 4.2 Access the Argo CD UI
+### 4.3 Access the Argo CD UI
 
 ```bash
 # Port-forward the Argo CD server
@@ -456,7 +587,10 @@ argocd login localhost:8443 \
 
 Open https://localhost:8443 in your browser and log in with `admin` / `<password>`.
 
-### 4.3 Register Your Git Repository
+> **kind tip**: If port 8443 conflicts with another service, use a different host port:
+> `kubectl port-forward svc/argocd-server -n argocd 9443:443 &`
+
+### 4.4 Register Your Git Repository
 
 ```bash
 # If using HTTPS with credentials
@@ -468,12 +602,22 @@ argocd repo add git@github.com:YOUR_ORG/helm-argo-cd-gitops.git \
   --ssh-private-key-path ~/.ssh/id_rsa
 ```
 
-### 4.4 Create the AppProject
+### 4.5 Create the AppProject
 
 ```bash
 kubectl apply -f argocd/project.yaml
 argocd proj list
 ```
+
+### 4.6 kind-Specific Considerations
+
+| Topic | Detail |
+|---|---|
+| **Image loading** | kind clusters cannot pull from local Docker. Use `kind load docker-image <image> --name helm-argocd-lab` to make images available. |
+| **Ingress** | The NGINX Ingress Controller installed in the prerequisites routes traffic through the control-plane node's port mappings (80/443 on localhost). |
+| **Persistence** | kind uses `standard` StorageClass backed by `rancher.io/local-path`. PVCs work out of the box. |
+| **Resources** | kind shares your host's Docker resources. If pods are Pending, check Docker's memory allocation (recommend 8 GB+). |
+| **Multiple clusters** | You can run multiple kind clusters simultaneously. Use `kubectl config use-context kind-<name>` to switch. |
 
 ---
 
@@ -850,6 +994,51 @@ kubectl describe pod <pod-name> -n <namespace>
 kubectl describe pod <pod-name> -n <namespace> | grep -A5 Events
 ```
 
+### kind-Specific Issues
+
+```bash
+# Cluster won't start — check Docker is running
+docker ps
+# If Docker daemon is not running, start it first
+
+# Cluster won't start — port conflict (80/443 already in use)
+# Check what's using the ports
+sudo lsof -i :80
+sudo lsof -i :443
+# Stop the conflicting service, or edit kind-config.yaml to use different host ports
+
+# Pods stuck in Pending — insufficient resources
+# Check Docker resource allocation
+docker stats --no-stream
+# Increase Docker memory to at least 8 GB (Docker Desktop > Settings > Resources)
+
+# Image not found inside kind cluster
+# kind cannot pull from the local Docker daemon by default
+kind load docker-image <image>:<tag> --name helm-argocd-lab
+
+# Check images available inside the kind cluster
+docker exec -it helm-argocd-lab-control-plane crictl images
+
+# Node not Ready
+kubectl describe node helm-argocd-lab-control-plane
+# Common cause: Docker running out of disk space
+docker system prune -a
+
+# Ingress not working — verify NGINX controller is running
+kubectl get pods -n ingress-nginx
+kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller
+
+# DNS resolution issues inside pods
+kubectl run dnsutils --image=registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3 \
+  --restart=Never -- sleep 3600
+kubectl exec dnsutils -- nslookup kubernetes.default
+kubectl delete pod dnsutils
+
+# Reset the cluster completely
+kind delete cluster --name helm-argocd-lab
+kind create cluster --config kind-config.yaml
+```
+
 ---
 
 ## Quick Reference
@@ -885,6 +1074,47 @@ argocd app rollback <name> <id>      # Rollback to a sync ID
 argocd app delete <name>             # Delete an application
 argocd proj list                     # List projects
 argocd repo list                     # List connected repos
+```
+
+### kind Commands Cheat Sheet
+
+```bash
+kind create cluster --config <file>                # Create cluster from config
+kind create cluster --name <name>                  # Create cluster with default settings
+kind get clusters                                  # List all kind clusters
+kind get kubeconfig --name <name>                  # Export kubeconfig
+kind get nodes --name <name>                       # List cluster nodes
+kind load docker-image <img> --name <name>         # Load image into cluster
+kind load image-archive <tar> --name <name>        # Load image from tar archive
+kind delete cluster --name <name>                  # Delete a cluster
+kind delete clusters --all                         # Delete all clusters
+kind export logs --name <name> /tmp/kind-logs      # Export cluster logs for debugging
+kind version                                       # Print kind version
+```
+
+---
+
+## Full Lab Cleanup
+
+When you are done with the lab, clean up all resources:
+
+```bash
+# 1. Uninstall all Helm releases
+helm uninstall webapp-dev -n webapp-dev 2>/dev/null
+helm uninstall webapp-staging -n webapp-staging 2>/dev/null
+helm uninstall webapp-prod -n webapp-prod 2>/dev/null
+
+# 2. Delete the Argo CD Applications
+kubectl delete -f argocd/app-of-apps.yaml 2>/dev/null
+kubectl delete -f argocd/apps/ 2>/dev/null
+kubectl delete -f argocd/project.yaml 2>/dev/null
+
+# 3. Delete the kind cluster (removes everything)
+kind delete cluster --name helm-argocd-lab
+
+# 4. Verify no clusters remain
+kind get clusters
+docker ps   # No kind containers should be running
 ```
 
 ---
