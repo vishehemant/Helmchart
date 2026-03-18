@@ -1,0 +1,82 @@
+name: Helm Chart CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "helm-charts/**"
+      - "environments/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "helm-charts/**"
+      - "environments/**"
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Lint base chart
+        run: helm lint helm-charts/webapp
+
+      - name: Lint with dev values
+        run: helm lint helm-charts/webapp -f environments/dev/values.yaml
+
+      - name: Lint with staging values
+        run: helm lint helm-charts/webapp -f environments/staging/values.yaml
+
+      - name: Lint with prod values
+        run: helm lint helm-charts/webapp -f environments/prod/values.yaml
+
+      - name: Template dev
+        run: |
+          helm template webapp-dev helm-charts/webapp \
+            -f environments/dev/values.yaml \
+            --namespace webapp-dev
+
+      - name: Template staging
+        run: |
+          helm template webapp-staging helm-charts/webapp \
+            -f environments/staging/values.yaml \
+            --namespace webapp-staging
+
+      - name: Template prod
+        run: |
+          helm template webapp-prod helm-charts/webapp \
+            -f environments/prod/values.yaml \
+            --namespace webapp-prod
+
+  kubeconform:
+    needs: lint-and-validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | \
+            tar xz -C /usr/local/bin
+
+      - name: Validate rendered manifests
+        run: |
+          for env in dev staging prod; do
+            echo "=== Validating ${env} ==="
+            helm template webapp-${env} helm-charts/webapp \
+              -f environments/${env}/values.yaml \
+              --namespace webapp-${env} | \
+              kubeconform -strict -summary
+          done

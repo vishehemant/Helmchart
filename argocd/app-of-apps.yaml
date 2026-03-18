@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: webapp-app-of-apps
+  namespace: argocd
+  labels:
+    app: webapp
+    pattern: app-of-apps
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/YOUR_ORG/helm-argo-cd-gitops.git
+    targetRevision: main
+    path: argocd/apps
+    directory:
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

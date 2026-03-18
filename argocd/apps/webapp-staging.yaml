@@ -1,0 +1,49 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: webapp-staging
+  namespace: argocd
+  labels:
+    environment: staging
+    app: webapp
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: devops-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: devops-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: webapp-project
+
+  source:
+    repoURL: https://github.com/YOUR_ORG/helm-argo-cd-gitops.git
+    targetRevision: main
+    path: helm-charts/webapp
+    helm:
+      valueFiles:
+        - ../../environments/staging/values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: webapp-staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

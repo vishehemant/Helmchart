@@ -1,0 +1,84 @@
+# =============================================================================
+# DEV Environment Values
+# =============================================================================
+# Low resource footprint, debug-friendly, single replica, no autoscaling.
+
+replicaCount: 1
+
+image:
+  repository: myregistry.azurecr.io/webapp
+  tag: "dev-latest"
+  pullPolicy: Always
+
+configMap:
+  enabled: true
+  data:
+    APP_ENV: "development"
+    LOG_LEVEL: "debug"
+    FEATURE_FLAG_NEW_UI: "true"
+    DB_HOST: "postgres-dev.default.svc.cluster.local"
+    DB_PORT: "5432"
+    DB_NAME: "webapp_dev"
+    CACHE_TTL: "60"
+
+secret:
+  enabled: true
+  data:
+    DB_PASSWORD: "dev-secret-password"
+    API_KEY: "dev-api-key-12345"
+
+service:
+  type: NodePort
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host: webapp.dev.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 5
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+persistence:
+  enabled: false
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 1

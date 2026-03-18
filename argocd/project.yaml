@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: webapp-project
+  namespace: argocd
+spec:
+  description: "Project for the webapp across all environments"
+  sourceRepos:
+    - "https://github.com/YOUR_ORG/helm-argo-cd-gitops.git"
+  destinations:
+    - namespace: webapp-dev
+      server: https://kubernetes.default.svc
+    - namespace: webapp-staging
+      server: https://kubernetes.default.svc
+    - namespace: webapp-prod
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  roles:
+    - name: developer
+      description: "Developer role with read-only access"
+      policies:
+        - p, proj:webapp-project:developer, applications, get, webapp-project/*, allow
+        - p, proj:webapp-project:developer, applications, sync, webapp-project/webapp-dev, allow
+    - name: devops
+      description: "DevOps role with full access"
+      policies:
+        - p, proj:webapp-project:devops, applications, *, webapp-project/*, allow

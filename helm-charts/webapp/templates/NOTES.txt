@@ -1,0 +1,45 @@
+===========================================================
+  {{ include "webapp.fullname" . }} has been deployed!
+===========================================================
+
+Chart Version : {{ .Chart.Version }}
+App Version   : {{ .Chart.AppVersion }}
+Release Name  : {{ .Release.Name }}
+Namespace     : {{ .Release.Namespace }}
+
+{{- if .Values.ingress.enabled }}
+
+Access the application via:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+
+{{- else if contains "NodePort" .Values.service.type }}
+
+Get the application URL by running:
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "webapp.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+
+{{- else if contains "LoadBalancer" .Values.service.type }}
+
+It may take a few minutes for the LoadBalancer IP to be available.
+Watch the status:
+  kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "webapp.fullname" . }}
+
+{{- else if contains "ClusterIP" .Values.service.type }}
+
+Access the application by running:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "webapp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  Then open: http://localhost:{{ .Values.service.port }}
+
+{{- end }}
+
+To check rollout status:
+  kubectl rollout status deployment/{{ include "webapp.fullname" . }} -n {{ .Release.Namespace }}
+
+To view release history:
+  helm history {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+To rollback to a previous revision:
+  helm rollback {{ .Release.Name }} <REVISION> -n {{ .Release.Namespace }}

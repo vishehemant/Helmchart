@@ -1,0 +1,118 @@
+# =============================================================================
+# PRODUCTION Environment Values
+# =============================================================================
+# High availability, strict resource governance, autoscaling enabled,
+# TLS enforced, pod anti-affinity for spread across nodes.
+
+replicaCount: 3
+
+image:
+  repository: myregistry.azurecr.io/webapp
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+configMap:
+  enabled: true
+  data:
+    APP_ENV: "production"
+    LOG_LEVEL: "warn"
+    FEATURE_FLAG_NEW_UI: "false"
+    DB_HOST: "postgres-prod.default.svc.cluster.local"
+    DB_PORT: "5432"
+    DB_NAME: "webapp_prod"
+    CACHE_TTL: "3600"
+
+secret:
+  enabled: true
+  data:
+    DB_PASSWORD: "prod-secret-password-CHANGE-ME"
+    API_KEY: "prod-api-key-CHANGE-ME"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: webapp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: webapp-prod-tls
+      hosts:
+        - webapp.example.com
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 75
+
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+persistence:
+  enabled: true
+  storageClass: "gp3"
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  mountPath: /data
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - webapp
+          topologyKey: kubernetes.io/hostname
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
